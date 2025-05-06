@@ -516,9 +516,9 @@ def load_environment(prefix):
                                          'activate.fish']}
 
     if context.kind == 'virtualenv':
-        remove.add(join(context.prefix, context.py_lib, 'orig-prefix.txt'))
+        remove.add(join(context.py_lib, 'orig-prefix.txt'))
     else:
-        remove.add(join(context.prefix, 'pyvenv.cfg'))
+        remove.add('pyvenv.cfg')
 
     res = []
 
