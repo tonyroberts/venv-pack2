@@ -616,7 +616,7 @@ def _rewrite_shebang(data, target, prefix):
 
         shebang, executable, options = shebang_match.groups()
 
-        if executable.startswith(prefix):
+        if executable.lower().startswith(prefix.lower()):
             # shebang points inside environment, rewrite
             new_shebang = (b'#!%s'
                            if on_win else
