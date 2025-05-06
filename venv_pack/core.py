@@ -422,7 +422,7 @@ def check_venv(prefix):
         for line in fil:
             key, val = line.split('=')
             if key.strip().lower() == 'home':
-                orig_prefix = os.path.dirname(val.strip())
+                orig_prefix = val.strip()
                 break
         else:  # pragma: nocover
             raise VenvPackException("%r is not a valid virtual "
