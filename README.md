@@ -58,6 +58,11 @@ Pack an environment located at an explicit path into my_env.zip
 venv-pack -p explicit\path\to\env -o env.zip 
 ```
 
+Pack a standalone package that doesn't require the base Python environment
+```
+venv-pack --standalone -o env.zip 
+```
+
 ### On the target machine
 
 Unpack environment into directory `my_env`
@@ -72,5 +77,5 @@ All features of venv should keep working from my_env folder.
 
 This tool is new, and has a few caveats.
 
-1. Python is not packaged with the environment, but rather symlinked in the environment. On Windows python venv does so in a pyvenv.cfg file. This is useful for deployment situations where Python is already installed on the machine, but the required library dependencies may not be.
+1. Python is not packaged with the environment unless the '--standalone' option is specified when packing. By default Python is symlinked in the environment. On Windows python venv does so in a pyvenv.cfg file. This is useful for deployment situations where Python is already installed on the machine, but the required library dependencies may not be.
 2. The os type where the environment was built must match the os type of the target. This means that environments built on windows can’t be relocated to linux.

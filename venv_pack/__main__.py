@@ -84,6 +84,9 @@ def build_parser():
     parser.add_argument("--force", "-f",
                         action="store_true",
                         help="Overwrite any existing archive at the output path.")
+    parser.add_argument("--standalone",
+                        action="store_true",
+                        help="Include the entire base Python distribution in the package.")
     parser.add_argument("--quiet", "-q",
                         action="store_true",
                         help="Do not report progress")
@@ -114,7 +117,8 @@ def main(args=None, pack=pack):
              zip_symlinks=args.zip_symlinks,
              zip_64=not args.no_zip_64,
              verbose=not args.quiet,
-             filters=args.filters)
+             filters=args.filters,
+             standalone=args.standalone)
     except VenvPackException as e:
         fail("VenvPackError: %s" % e)
     except KeyboardInterrupt:  # pragma: nocover

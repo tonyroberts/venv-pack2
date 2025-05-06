@@ -86,7 +86,7 @@ class Env(object):
     >>> Env().pack(output="environment.tar.gz")
     "/full/path/to/environment.tar.gz"
     """
-    __slots__ = ('_context', 'files', '_excluded_files')
+    __slots__ = ('_context', 'files', '_excluded_files', '_base_env')
 
     def __init__(self, prefix=None):
         context, files = load_environment(prefix)
@@ -94,6 +94,7 @@ class Env(object):
         self._context = context
         self.files = files
         self._excluded_files = []
+        self._base_env = None
 
     def _copy_with_files(self, files, excluded_files):
         out = object.__new__(Env)
@@ -101,6 +102,13 @@ class Env(object):
         out.files = files
         out._excluded_files = excluded_files
         return out
+
+    @property
+    def base_env(self):
+        if self._base_env is None \
+        and self.kind in ("virtualenv", "venv"):
+            self._base_env = Env(self.orig_prefix)
+        return self._base_env
 
     @property
     def prefix(self):
@@ -224,7 +232,7 @@ class Env(object):
 
     def pack(self, output=None, format='infer', python_prefix=None,
              verbose=False, force=False, compress_level=4, zip_symlinks=False,
-             zip_64=True):
+             zip_64=True, standalone=False):
         """Package the virtual environment into an archive file.
 
         Parameters
@@ -259,6 +267,10 @@ class Env(object):
             symlinks*. Default is False. Ignored if format isn't ``zip``.
         zip_64 : bool, optional
             Whether to enable ZIP64 extensions. Default is True.
+        standalone : bool, optional
+            If True include the files from the base Python environment in the
+            package and create a standalone Python environment that does not
+            need the base environment when unpacked.
 
         Returns
         -------
@@ -274,6 +286,10 @@ class Env(object):
         if verbose:
             print("Packing environment at %r to %r" % (self.prefix, output))
 
+        all_files = list(self.files)
+        if standalone:
+            all_files = combine_env_files(self, self.base_env)
+
         fd, temp_path = tempfile.mkstemp()
 
         try:
@@ -282,8 +298,8 @@ class Env(object):
                              compress_level=compress_level,
                              zip_symlinks=zip_symlinks,
                              zip_64=zip_64) as arc:
-                    packer = Packer(self._context, arc, python_prefix)
-                    with progressbar(self.files, enabled=verbose) as files:
+                    packer = Packer(self._context, arc, python_prefix, standalone=standalone)
+                    with progressbar(all_files, enabled=verbose) as files:
                         try:
                             for f in files:
                                 packer.add(f)
@@ -323,7 +339,7 @@ class File(namedtuple('File', ('source', 'target'))):
 
 def pack(prefix=None, output=None, format='infer', python_prefix=None,
          verbose=False, force=False, compress_level=4, zip_symlinks=False,
-         zip_64=True, filters=None):
+         zip_64=True, filters=None, standalone=False):
     """Package an existing virtual environment into an archive file.
 
     Parameters
@@ -365,6 +381,10 @@ def pack(prefix=None, output=None, format='infer', python_prefix=None,
         ``(kind, pattern)``, where ``kind`` is either ``'exclude'`` or
         ``'include'`` and ``pattern`` is a file pattern. Filters are applied in
         the order specified.
+    standalone : bool, optional
+        If True include the files from the base Python environment in the
+        package and create a standalone Python environment that does not
+        need the base environment when unpacked.
 
     Returns
     -------
@@ -389,7 +409,8 @@ def pack(prefix=None, output=None, format='infer', python_prefix=None,
                     python_prefix=python_prefix,
                     verbose=verbose, force=force,
                     compress_level=compress_level,
-                    zip_symlinks=zip_symlinks, zip_64=zip_64)
+                    zip_symlinks=zip_symlinks, zip_64=zip_64,
+                    standalone=standalone)
 
 
 def check_prefix(prefix=None):
@@ -404,7 +425,7 @@ def check_prefix(prefix=None):
     if not os.path.exists(prefix):
         raise VenvPackException("Environment path %r doesn't exist" % prefix)
 
-    for check in [check_venv, check_virtualenv]:
+    for check in [check_venv, check_virtualenv, check_baseenv]:
         try:
             return check(prefix)
         except VenvPackException:
@@ -460,6 +481,22 @@ def check_virtualenv(prefix):
 
     return context
 
+def check_baseenv(prefix):
+    python_lib, python_include = find_python_lib_include(prefix)
+
+    if not os.path.exists(os.path.join(prefix, python_lib, "os.py")):
+        raise VenvPackException("%r is not a valid Python environment" % prefix)
+
+
+    context = AttrDict()
+
+    context.kind = 'base'
+    context.prefix = prefix
+    context.orig_prefix = None
+    context.py_lib = python_lib
+    context.py_include = python_include
+
+    return context
 
 def find_python_lib_include(prefix):
     if on_win:
@@ -659,11 +696,44 @@ def check_python_prefix(python_prefix, context):
     return python_prefix, rewrites
 
 
+def combine_env_files(venv, base_env):
+    """Combines the files from a virtual environment and it's base environment.
+    Returns a new list of files.
+    """
+    all_files = {}
+    exe_suffix = '.exe' if on_win else ''
+
+    # Don't include the Python executables from the virtual environment
+    exclude = {
+        os.path.join(venv.prefix, BIN_DIR, 'python' + exe_suffix).lower(),
+        os.path.join(venv.prefix, BIN_DIR, 'pythonw' + exe_suffix).lower()
+    }
+
+    # Copy the base Python excectuables and shared libraries into BIN_DIR as the
+    # other scripts need them to be there for them to work.
+    for file in os.listdir(base_env.prefix):
+        source = os.path.join(base_env.prefix, file)
+        if os.path.isfile(source):
+            _, ext = os.path.splitext(file)
+            if ext.lower() in ("", ".dll", ".so", ".exe", ".pdb"):
+                target = os.path.join(BIN_DIR, file)
+                all_files[target] = File(source, target)
+                exclude.add(source.lower())
+
+    # Include all files from the base env, and for any files that exist in both use the
+    # file from the virtual env.
+    all_files.update({f.target: f for f in base_env.files if f.source.lower() not in exclude})
+    all_files.update({f.target: f for f in venv.files if f.source.lower() not in exclude})
+
+    return all_files.values()
+
+
 class Packer(object):
-    def __init__(self, context, archive, python_prefix):
+    def __init__(self, context, archive, python_prefix, standalone=False):
         self.context = context
         self.prefix = context.prefix
         self.archive = archive
+        self.standalone = standalone
 
         python_prefix, rewrites = check_python_prefix(python_prefix, context)
         self.python_prefix = python_prefix
@@ -689,34 +759,35 @@ class Packer(object):
             self.archive.add(file.source, file.target)
 
     def finish(self):
-        script_dirs = ['common', 'nt']
+        if not self.standalone:
+            script_dirs = ['common', 'nt']
 
-        for d in script_dirs:
-            dirpath = os.path.join(SCRIPTS, d)
-            for f in os.listdir(dirpath):
-                source = os.path.join(dirpath, f)
-                target = os.path.join(BIN_DIR, f)
-                self.archive.add(source, target)
+            for d in script_dirs:
+                dirpath = os.path.join(SCRIPTS, d)
+                for f in os.listdir(dirpath):
+                    source = os.path.join(dirpath, f)
+                    target = os.path.join(BIN_DIR, f)
+                    self.archive.add(source, target)
 
-        if self.context.kind == 'venv':
-            pyvenv_cfg = os.path.join(self.prefix, 'pyvenv.cfg')
-            if self.python_prefix is None:
-                self.archive.add(pyvenv_cfg, 'pyvenv.cfg')
+            if self.context.kind == 'venv':
+                pyvenv_cfg = os.path.join(self.prefix, 'pyvenv.cfg')
+                if self.python_prefix is None:
+                    self.archive.add(pyvenv_cfg, 'pyvenv.cfg')
+                else:
+                    with open(pyvenv_cfg) as fil:
+                        data = fil.read()
+                    data = data.replace(self.context.orig_prefix,
+                                        self.python_prefix)
+                    self.archive.add_bytes(pyvenv_cfg, data.encode(), 'pyvenv.cfg')
             else:
-                with open(pyvenv_cfg) as fil:
-                    data = fil.read()
-                data = data.replace(self.context.orig_prefix,
-                                    self.python_prefix)
-                self.archive.add_bytes(pyvenv_cfg, data.encode(), 'pyvenv.cfg')
-        else:
-            origprefix_txt = os.path.join(self.context.prefix,
-                                          self.context.py_lib,
-                                          'orig-prefix.txt')
-            target = os.path.relpath(origprefix_txt, self.prefix)
+                origprefix_txt = os.path.join(self.context.prefix,
+                                            self.context.py_lib,
+                                            'orig-prefix.txt')
+                target = os.path.relpath(origprefix_txt, self.prefix)
 
-            if self.python_prefix is None:
-                self.archive.add(origprefix_txt, target)
-            else:
-                self.archive.add_bytes(origprefix_txt,
-                                       self.python_prefix.encode(),
-                                       target)
+                if self.python_prefix is None:
+                    self.archive.add(origprefix_txt, target)
+                else:
+                    self.archive.add_bytes(origprefix_txt,
+                                        self.python_prefix.encode(),
+                                        target)
