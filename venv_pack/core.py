@@ -512,8 +512,7 @@ def load_environment(prefix):
     check_no_editable_packages(context)
 
     # Files to ignore
-    remove = {join(BIN_DIR, f) for f in ['activate', 'activate.csh',
-                                         'activate.fish']}
+    remove = {join(BIN_DIR, "activate" + suffix) for suffix in ('', '.csh', '.fish', '.bat', '.ps1')}
 
     if context.kind == 'virtualenv':
         remove.add(join(context.py_lib, 'orig-prefix.txt'))
@@ -546,7 +545,7 @@ def load_environment(prefix):
 
     files = [File(os.path.join(prefix, p), p)
              for p in res
-             if not (p in remove or p.endswith('~') or p.endswith('.DS_STORE'))]
+             if not (p.lower() in remove or p.endswith('~') or p.endswith('.DS_STORE'))]
 
     return context, files
 
